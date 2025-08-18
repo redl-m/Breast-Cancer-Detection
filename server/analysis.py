@@ -2,140 +2,141 @@ import tensorflow as tf
 import numpy as np
 from PIL import Image
 import io
-import cv2  # OpenCV for image manipulation
+import cv2
 import base64
 import matplotlib.cm as cm
 
+def _is_conv(layer):
+    return isinstance(layer, tf.keras.layers.Conv2D)
+
+
+def preprocess_image(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    img = img.resize((224, 224))
+    arr = tf.keras.preprocessing.image.img_to_array(img)
+
+    arr = arr / 255.0 # normalized values
+
+    arr = tf.expand_dims(arr, 0)
+    return arr
+
+
+def _superimpose_gradcam(img_bytes, heatmap, alpha=0.4):
+    img = np.array(Image.open(io.BytesIO(img_bytes)).convert('RGB'))
+    img = cv2.resize(img, (224, 224))
+    heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+
+    jet = cm.get_cmap("jet")
+    jet_colors = jet(np.arange(256))[:, :3]
+    jet_heatmap = jet_colors[np.uint8(255 * heatmap)]
+    jet_heatmap = cv2.cvtColor(np.float32(jet_heatmap), cv2.COLOR_RGB2BGR)
+
+    superimposed = jet_heatmap * alpha + cv2.cvtColor(np.float32(img / 255.0), cv2.COLOR_RGB2BGR)
+    superimposed = np.clip(superimposed, 0, 1)
+    superimposed = np.uint8(255 * superimposed)
+
+    ok, buf = cv2.imencode(".jpg", superimposed)
+    if not ok:
+        raise ValueError("Could not encode heatmap image.")
+    return buf.tobytes()
+
 
 class ImageAnalyzer:
-    def __init__(self, model_path, class_names_path):
+    def __init__(self, model_path, class_names_path, min_spatial=7):
         print(f"Loading model from {model_path}...")
-        self.model = tf.keras.models.load_model(model_path)
+        loaded_model = tf.keras.models.load_model(model_path)
         print("Model loaded successfully.")
 
         with open(class_names_path, 'r') as f:
             self.class_names = [line.strip() for line in f.readlines()]
         print(f"Loaded class names: {self.class_names}")
 
-        # Find the last convolutional layer for Grand-CAM
-        self.last_conv_layer_name = self._find_last_conv_layer()
-        print(f"Found last conv layer for Grad-CAM: {self.last_conv_layer_name}")
+        self.model = loaded_model
+        self.min_spatial = min_spatial
 
-        inputs = tf.keras.Input(shape=(224, 224, 3), name="gradcam_input")
-        outputs = self.model(inputs, training=False)
+        # ---- Rebuild a clean graph manually, recording conv feature maps ----
+        new_input = tf.keras.Input(shape=(224, 224, 3))
+        x = new_input
 
-        # TODO: Fix Grand-CAM heatmap error
-        """
-        Could not generate Grad-CAM heatmap: "Exception encountered when calling Functional.call().\n\n\x1b[1m1938658692368\x1b[0m\n\nArgument
-        s received by Functional.call():\n  • inputs=tf.Tensor(shape=(1, 224, 224, 3), dtype=float32)\n  • training=None\n  • mask=None\n  • kwargs=<class 'inspect._empty'>"
-        """
-        self.grad_model = tf.keras.models.Model(
-            inputs=self.model.input,
-            outputs=[
-                self.model.get_layer(self.last_conv_layer_name).output,
-                self.model.output
-            ]
-        )
+        conv_outputs = []  # [(layer_name, tensor)]
+        for layer in loaded_model.layers:
+            x = layer(x)
+            if _is_conv(layer):
+                conv_outputs.append((layer.name, x))
 
-        print("Model built successfully.")
+        model_output = x  # final output of the rebuilt graph
 
-    def _find_last_conv_layer(self):
-        """
-        Finds the name of the last Conv2D layer by checking the layer's type.
-        This is the most reliable method and works for both simple and nested models.
-        """
-        # Iterate through the model's layers in reverse
-        for layer in reversed(self.model.layers):
-            # If a layer is a model itself, search inside it
-            if isinstance(layer, tf.keras.Model):
-                for sub_layer in reversed(layer.layers):
-                    if isinstance(sub_layer, tf.keras.layers.Conv2D):
-                        return sub_layer.name
+        # Pick the deepest conv with spatial size >= min_spatial (fallback to last conv)
+        chosen_name, chosen_tensor = None, None
+        for name, tensor in reversed(conv_outputs):
+            shp = tensor.shape  # (None, H, W, C)
+            h, w = int(shp[1]) if shp[1] is not None else 0, int(shp[2]) if shp[2] is not None else 0
+            if h >= self.min_spatial and w >= self.min_spatial:
+                chosen_name, chosen_tensor = name, tensor
+                break
+        if chosen_tensor is None and conv_outputs:
+            chosen_name, chosen_tensor = conv_outputs[-1]  # fallback
+        if chosen_tensor is None:
+            raise ValueError("Could not find a Conv2D layer to use for Grad-CAM.")
 
-            # Check if the top-level layer is a Conv2D layer
-            elif isinstance(layer, tf.keras.layers.Conv2D):
-                return layer.name
+        self.last_conv_layer_name = chosen_name
+        print(f"Grad-CAM will use conv layer: {self.last_conv_layer_name} (spatial {chosen_tensor.shape[1]}×{chosen_tensor.shape[2]})")
 
-        raise ValueError("Could not find a Conv2D layer in the model for Grad-CAM.")
+        # Grad model built from the manually re-applied layers
+        self.grad_model = tf.keras.models.Model(inputs=new_input, outputs=[chosen_tensor, model_output])
+        print("Robust Grad-CAM model built successfully.")
 
     def _make_gradcam_heatmap(self, img_array):
-        """Generates a Grad-CAM heatmap."""
-        with tf.GradientTape() as tape:
-            last_conv_layer_output, preds = self.grad_model(img_array)
-            class_channel = preds[:, 0]
+        """Generates a Grad-CAM heatmap (handles binary logits & multi-class)."""
 
-        grads = tape.gradient(class_channel, last_conv_layer_output)
-        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-        last_conv_layer_output = last_conv_layer_output[0]
-        heatmap = last_conv_layer_output @ pooled_grads[..., tf.newaxis]
+        with tf.GradientTape() as tape:
+            conv_out, preds = self.grad_model(img_array, training=False)
+
+            if preds.shape[-1] == 1:
+                p = tf.clip_by_value(preds, 1e-7, 1 - 1e-7)
+                logits = tf.math.log(p) - tf.math.log(1.0 - p)  # logit(p)
+                class_channel = logits[:, 0]
+            else:
+                # If multi-class, use the predicted class score
+                pred_index = tf.argmax(preds[0])
+                class_channel = preds[:, pred_index]
+
+        grads = tape.gradient(class_channel, conv_out)
+        if grads is None:
+            raise RuntimeError("Gradients are None. The graph may be disconnected.")
+
+        # Channel-wise weights (GAP over spatial dims)
+        weights = tf.reduce_mean(grads, axis=(0, 1, 2))
+        conv_out = conv_out[0]  # [H, W, C]
+
+        # Weighted sum over channels -> [H, W]
+        heatmap = conv_out @ weights[..., tf.newaxis]
         heatmap = tf.squeeze(heatmap)
 
-        # For visualization, we will normalize the heatmap between 0 and 1
-        heatmap = tf.maximum(heatmap, 0)
-        heatmap_max = tf.math.reduce_max(heatmap)
-        if heatmap_max == 0:
-            heatmap_max = 1e-10  # Add a small constant to prevent division by zero
-        heatmap = heatmap / heatmap_max
+        # ReLU and normalize to [0,1]
+        heatmap = tf.nn.relu(heatmap)
+        maxv = tf.reduce_max(heatmap)
+        heatmap = heatmap / (maxv + 1e-8)
         return heatmap.numpy()
 
-    def _superimpose_gradcam(self, img_bytes, heatmap, alpha=0.4):
-        """Superimposes the heatmap on the original image."""
-        img = np.array(Image.open(io.BytesIO(img_bytes)).convert('RGB'))
-        img = cv2.resize(img, (224, 224))
-
-        heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
-
-        # We use a colormap to colorize the heatmap
-        jet = cm.get_cmap("jet")
-        jet_colors = jet(np.arange(256))[:, :3]
-        jet_heatmap = jet_colors[np.uint8(255 * heatmap)]
-
-        # Convert to BGR for OpenCV
-        jet_heatmap = cv2.cvtColor(np.float32(jet_heatmap), cv2.COLOR_RGB2BGR)
-
-        # Superimpose the heatmap on original image
-        superimposed_img = jet_heatmap * alpha + cv2.cvtColor(np.float32(img / 255.0), cv2.COLOR_RGB2BGR)
-        superimposed_img = np.clip(superimposed_img, 0, 1)
-
-        # Convert back to uint8
-        superimposed_img = np.uint8(255 * superimposed_img)
-
-        # Encode to JPEG bytes
-        is_success, buffer = cv2.imencode(".jpg", superimposed_img)
-        if not is_success:
-            raise ValueError("Could not encode heatmap image.")
-
-        return buffer.tobytes()
-
-    def preprocess_image(self, image_bytes):
-        """Takes image bytes, preprocesses it to the model's required format."""
-        img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-        img = img.resize((224, 224))
-        img_array = tf.keras.preprocessing.image.img_to_array(img)
-        img_array = tf.expand_dims(img_array, 0)
-        return img_array
-
     def predict(self, image_bytes):
-        """Analyzes an image and returns the prediction, confidence, and heatmap."""
-        processed_image = self.preprocess_image(image_bytes)
+        processed = preprocess_image(image_bytes)
 
-        # Make prediction
-        prediction = self.model.predict(processed_image)
-        score = prediction[0][0]
-
-        print("INFO: Score: " + str(score))
+        # Prediction for class/score readout
+        prediction = self.model(processed, training=False).numpy()
+        score = float(prediction[0][0])
 
         if score < 0.5:
-            predicted_class = self.class_names[0]  # Benign
+            predicted_class = self.class_names[0]
             confidence = 1 - score
         else:
-            predicted_class = self.class_names[1]  # Malignant
+            predicted_class = self.class_names[1]
             confidence = score
 
-        # Generate and apply Grad-CAM heatmap
+        # Grad-CAM
         try:
-            heatmap = self._make_gradcam_heatmap(processed_image)
-            heatmap_bytes = self._superimpose_gradcam(image_bytes, heatmap)
+            heatmap = self._make_gradcam_heatmap(processed)
+            heatmap_bytes = _superimpose_gradcam(image_bytes, heatmap)
             heatmap_base64 = base64.b64encode(heatmap_bytes).decode('utf-8')
         except Exception as e:
             print(f"Could not generate Grad-CAM heatmap: {e}")
@@ -144,10 +145,9 @@ class ImageAnalyzer:
         return {
             "class": predicted_class,
             "confidence": f"{confidence:.2%}",
-            "raw_confidence": confidence,  # for the chart
+            "raw_confidence": confidence,
             "heatmap_data": heatmap_base64
         }
-
 
 try:
     analyzer = ImageAnalyzer(
