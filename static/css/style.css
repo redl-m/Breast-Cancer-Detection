@@ -1,0 +1,272 @@
+:root {
+    --bg-color: #121217;
+    --panel-bg: #1e1e24;
+    --input-bg: #2a2a30;
+    --border-color: #333338;
+    --accent-color: #8a63d2;
+    --accent-hover: #9b78e0;
+    --text-color: #e4e4e4;
+    --text-muted: #888;
+    --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --status-green: #27ae60;
+    --status-red: #c0392b;
+}
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1rem;
+    overflow: hidden;
+}
+
+.container {
+    width: 100%;
+    height: 100%;
+    max-width: 1600px;
+    max-height: 95vh;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+h1, h2, h3 {
+    letter-spacing: -0.02em;
+    font-weight: 500;
+}
+
+/* ==========================================================================
+   2. LAYOUT
+   ========================================================================== */
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1.5rem;
+    background-color: var(--panel-bg);
+    border-radius: 12px;
+    border: 1px solid var(--border-color);
+    flex-shrink: 0;
+}
+
+header h1 {
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.controls-top {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+main {
+    flex-grow: 1;
+    display: flex;
+    gap: 1rem;
+    overflow: hidden;
+}
+
+.image-section {
+    flex: 2;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--panel-bg);
+    border-radius: 12px;
+    padding: 1rem;
+    border: 1px solid var(--border-color);
+    min-width: 0;
+}
+
+#analysis-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    overflow-y: auto;
+    padding-right: 8px;
+    min-width: 350px;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #444;
+    border-radius: 3px;
+}
+
+/* ==========================================================================
+   3. COMPONENTS
+   ========================================================================== */
+.button, button {
+    font-family: var(--font-family);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.2rem;
+    font-size: 0.9rem;
+    font-weight: 500;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: #2a2a30;
+    color: var(--text-color);
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.button:hover, button:hover {
+    background-color: #383841;
+}
+
+#image-wrapper {
+    position: relative;
+    width: 100%;
+    flex-grow: 1;
+    background-color: #000;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#image-wrapper img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+#placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+#placeholder-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    gap: 1rem;
+    text-align: center;
+}
+
+/* Analysis Panel Cards */
+.card {
+    flex-shrink: 0;
+    background-color: var(--panel-bg);
+    border-radius: 12px;
+    padding: 1rem 1.5rem;
+    border: 1px solid var(--border-color);
+}
+
+.card-header {
+    margin-bottom: 1rem;
+}
+
+.card-header h2 {
+    font-size: 1rem;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.info-text {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.diagnosis-result {
+    text-align: center;
+    padding: 1rem 0;
+}
+
+.diagnosis-result p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+
+.diagnosis-result h3 {
+    font-size: 2.5rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+}
+
+.diagnosis-result h3.Benign { color: var(--status-green); }
+.diagnosis-result h3.Malignant { color: var(--status-red); }
+
+.diagnosis-result span {
+    font-size: 0.9rem;
+    background-color: var(--input-bg);
+    padding: 0.25rem 0.75rem;
+    border-radius: 15px;
+    color: var(--text-color);
+}
+
+.chart-wrapper {
+    height: 120px; /* Give the chart a fixed height */
+}
+
+.heatmap-wrapper img {
+    width: 100%;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    border: 1px solid var(--border-color);
+}
+
+/* Error Banner */
+
+.error-banner {
+    background-color: #c0392b;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+/* ==========================================================================
+   4. RESPONSIVE DESIGN
+   ========================================================================== */
+@media (max-width: 900px) {
+    main {
+        flex-direction: column;
+        overflow-y: auto;
+    }
+    #analysis-section {
+        min-width: unset;
+        overflow-y: visible;
+    }
+}
+
+@media (max-width: 600px) {
+    body {
+        padding: 0.5rem;
+    }
+    header {
+        flex-direction: column;
+        gap: 1rem;
+    }
+}

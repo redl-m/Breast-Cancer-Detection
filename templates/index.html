@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mammogram Analysis System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}"/>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>Mammogram Analysis System</h1>
+
+        {% if error %}
+        <div class="error-banner">
+            <p><strong>Analysis Failed:</strong> {{ error }}</p>
+        </div>
+        {% endif %}
+        <div class="controls-top">
+            <form id="upload-form" action="/predict" method="post" enctype="multipart/form-data"
+                  style="display: contents;">
+                <label for="imageUpload" class="button">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                    Upload Image
+                    <input type="file" id="imageUpload" name="file" accept="image/*" hidden
+                           onchange="document.getElementById('upload-form').submit();">
+                </label>
+            </form>
+        </div>
+    </header>
+
+    <main>
+        <div class="image-section">
+            <div id="image-wrapper">
+                {% if image_data %}
+                <img id="uploaded-image" src="data:image/png;base64,{{ image_data }}" alt="Uploaded Mammogram"/>
+                {% else %}
+                <div id="placeholder">
+                    <div id="placeholder-content">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                            <polyline points="21 15 16 10 5 21"></polyline>
+                        </svg>
+                        <p>Upload an image to begin analysis</p>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <aside id="analysis-section">
+            {% if prediction %}
+            <div class="card">
+                <div class="card-header">
+                    <h2>Overall Diagnosis</h2>
+                </div>
+                <div class="diagnosis-result">
+                    <p>The analysis indicates the tissue is likely:</p>
+                    <h3 class="{{ prediction.class }}">{{ prediction.class }}</h3>
+                    <span>Confidence: {{ prediction.confidence }}</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2>Prediction Confidence</h2>
+                </div>
+                <div class="chart-wrapper">
+                    <canvas id="confidenceChart"></canvas>
+                </div>
+            </div>
+
+            {% if prediction.heatmap_data %}
+            <div class="card">
+                <div class="card-header">
+                    <h2>Saliency Map (Grad-CAM)</h2>
+                </div>
+                <div class="heatmap-wrapper">
+                    <img src="data:image/jpeg;base64,{{ prediction.heatmap_data }}" alt="Grad-CAM Heatmap"/>
+                    <p class="info-text">This heatmap highlights the areas of the image that most influenced the model's
+                        decision.</p>
+                </div>
+            </div>
+            {% endif %}
+
+            {% else %}
+            <div class="card">
+                <div class="card-header">
+                    <h2>Analysis Panel</h2>
+                </div>
+                <p class="info-text">Results will be displayed here once an image is uploaded and analyzed.</p>
+            </div>
+            {% endif %}
+        </aside>
+    </main>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+{% if prediction %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const ctx = document.getElementById('confidenceChart').getContext('2d');
+        const rawConfidence = parseFloat("{{ prediction.raw_confidence }}");
+        const isMalignant = "{{ prediction.class }}" === "Malignant";
+
+        const benignConf = isMalignant ? 1 - rawConfidence : rawConfidence;
+        const malignantConf = isMalignant ? rawConfidence : 1 - rawConfidence;
+
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Benign', 'Malignant'],
+                datasets: [{
+                    label: 'Confidence',
+                    data: [benignConf * 100, malignantConf * 100],
+                    backgroundColor: [
+                        'rgba(39, 174, 96, 0.6)',  // Greenish
+                        'rgba(192, 57, 43, 0.6)'  // Reddish
+                    ],
+                    borderColor: [
+                        'rgba(39, 174, 96, 1)',
+                        'rgba(192, 57, 43, 1)'
+                    ],
+                    borderWidth: 2,
+                    borderRadius: 5
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        max: 100,
+                        ticks: {
+                            color: '#888',
+                            callback: function (value) {
+                                return value + '%'
+                            }
+                        },
+                        grid: {
+                            color: '#333338'
+                        }
+                    },
+                    y: {
+                        ticks: {
+                            color: '#e4e4e4',
+                            font: {
+                                size: 14
+                            }
+                        },
+                        grid: {
+                            display: false
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+    });
+</script>
+{% endif %}
+</body>
+</html>
